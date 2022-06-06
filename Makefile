@@ -3,7 +3,7 @@
 CC = qcc  # ntox86-gcc
 CXX = g++
 LFLAGS = -Wall #-Vgcc_ntox86
-LIBS = #-l socket
+LIBS = -l ncurses #-l socket
 
 BIN_PATH = ./bin
 SOURCE_PATH = ./src
@@ -21,7 +21,3 @@ $(BIN_PATH):
 
 clean:
 	rm -f $(TARGET)
-
-
-
-
