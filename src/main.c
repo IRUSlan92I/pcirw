@@ -56,6 +56,9 @@ typedef struct device_t {
     uint8_t subclass;
     uint8_t class;
 
+    uint32_t bars[6];
+    uint32_t bar_sizes[6];
+
     uint16_t ss_vendor_id;
     uint16_t ss_device_id;
 
@@ -204,7 +207,7 @@ void draw_wdevices(void)
     int x = 2;
     int y = 0;
 
-    mvwprintw(wdevices, y++, x, " b  d f  vid  did  cmd stat rv  c sc if  ssv  ssd");
+    mvwprintw(wdevices, y++, x, " b  d f  vid  did  cmd stat rv  c sc if");
 
     Device *first_device_for_printing = first_device;
     while (
@@ -264,6 +267,14 @@ void draw_waboutd(void)
         mvwprintw(waboutd, y++, x, "Device: %s", selected_device->desc_device);
     }
 
+    int i;
+    for (i = 0; i < 6; i++) {
+        if (selected_device->bar_sizes[i]) {
+                mvwprintw(waboutd, y++, x, "BAR %d: (%u) %X ", i, selected_device->bar_sizes[i], selected_device->bars[i]);
+        }
+
+    }
+
     touchwin(waboutd);
     wrefresh(waboutd);
 }
@@ -275,11 +286,10 @@ void draw_device(Device *d, int y, int x)
     }
 
     mvwprintw(wdevices, y, x,
-        "%2d %2d %d %04X %04X %04X %04X %02X %02X %02X %02X %04X %04X",
+        "%2d %2d %d %04X %04X %04X %04X %02X %02X %02X %02X",
         d->bus, d->device, d->function, d->vendor_id, d->device_id,
         d->command, d->status, d->revision,
-        d->class, d->subclass, d->interface,
-        d->ss_vendor_id, d->ss_device_id
+        d->class, d->subclass, d->interface
     );
 
     if (use_color && d == selected_device) {
@@ -395,6 +405,50 @@ void fill_devices(void)
                     ) != PCI_SUCCESS) {
                         perror("Unable to get ss_device_id");
                         exit(1);
+                    }
+
+
+                    int bar_count = (*next_device)->class == 6 ? 2 : 6;
+                    int i;
+                    for (i = 0; i < bar_count; i++) {
+                        if (pci_read_config(
+                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bars[i]
+                        ) != PCI_SUCCESS) {
+                            perror("Unable to get bar");
+                            exit(1);
+                        }
+                        uint32_t data = 0xFFFFFFFF;
+                        if (pci_write_config(
+                            handleDevice, 0x10+0x04*i, 1, 4, &data
+                        ) != PCI_SUCCESS) {
+                            perror("Unable to write bar");
+                            exit(1);
+                        }
+                        if (pci_read_config(
+                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bar_sizes[i]
+                        ) != PCI_SUCCESS) {
+                            perror("Unable to get bar");
+                            exit(1);
+                        }
+                        if (pci_write_config(
+                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bars[i]
+                        ) != PCI_SUCCESS) {
+                            perror("Unable to write bar");
+                            exit(1);
+                        }
+                        if ((*next_device)->bar_sizes[i] & 0x1 && (*next_device)->bar_sizes[i] & 0x2) {
+                            (*next_device)->bar_sizes[i] = 0;
+                        }
+                        else {
+                            if ((*next_device)->bar_sizes[i] & 0x1) {
+                                (*next_device)->bar_sizes[i] &= ~0x3;
+                            }
+                            else {
+                                (*next_device)->bar_sizes[i] &= ~0xF;
+                            }
+
+                            (*next_device)->bar_sizes[i] &= (~(*next_device)->bar_sizes[i])+1;
+                        }
                     }
 
                     pci_detach_device(handleDevice);
