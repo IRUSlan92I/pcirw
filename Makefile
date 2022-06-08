@@ -1,9 +1,9 @@
 .PHONY: all clean
 
-CC = qcc  # ntox86-gcc
+CC = ntox86-gcc
 CXX = g++
 LFLAGS = -Wall #-Vgcc_ntox86
-LIBS = #-l socket
+LIBS = -l ncurses #-l socket
 
 BIN_PATH = ./bin
 SOURCE_PATH = ./src
@@ -14,14 +14,10 @@ SRCS = $(SOURCE_PATH)/main.c
 
 all:
 	mkdir -p $(BIN_PATH)
-	$(CXX) $(LFLAGS) -o $(TARGET) $(SRCS) $(LIBS)
+	$(CC) $(LFLAGS) -o $(TARGET) $(SRCS) $(LIBS)
 
 $(BIN_PATH):
 	mkdir -p $(BIN_PATH)
 
 clean:
 	rm -f $(TARGET)
-
-
-
-
