@@ -37,9 +37,129 @@ typedef struct {
     int width;
 } Size;
 
-typedef struct device_t {
-    struct device_t *previous;
-    struct device_t *next;
+typedef enum {
+    Device,
+    TypeDevice,
+    TypeBridge,
+} Type;
+
+typedef struct {
+    uint16_t vendor_id;
+    uint16_t device_id;
+
+    uint16_t command;
+    uint16_t status;
+
+    uint8_t revision;
+    uint8_t interface;
+    uint8_t subclass;
+    uint8_t class;
+
+    uint8_t cache_line_size;
+    uint8_t latency_timer;
+    uint8_t header_type;
+    uint8_t bist;
+
+    uint32_t bars[6];
+
+    uint32_t cis_pointer;
+
+    uint16_t ss_vendor_id;
+    uint16_t ss_device_id;
+
+    uint32_t exp_bar;
+
+    uint8_t capabilities;
+
+    uint8_t reserved[7];
+
+    uint8_t int_line;
+    uint8_t int_pin;
+    uint8_t min_gnt;
+    uint8_t max_lat;
+} DeviceConfig;
+
+typedef struct {
+    uint16_t vendor_id;
+    uint16_t device_id;
+
+    uint16_t command;
+    uint16_t status;
+
+    uint8_t revision;
+    uint8_t interface;
+    uint8_t subclass;
+    uint8_t class;
+
+    uint8_t cache_line_size;
+    uint8_t latency_timer;
+    uint8_t header_type;
+    uint8_t bist;
+
+    uint32_t bars[2];
+
+    uint8_t primary_bus;
+    uint8_t secondary_bus;
+    uint8_t subordinate_bus;
+    uint8_t secondary_latency_timer;
+
+    uint8_t io_base;
+    uint8_t io_limit;
+    uint16_t secondary_status;
+
+    uint16_t memory_base;
+    uint16_t memory_limit;
+
+    uint16_t prefetch_memory_base;
+    uint16_t prefetch_memory_limit;
+
+    uint32_t prefetch_base_upper;
+
+    uint32_t prefetch_limit_upper;
+
+    uint16_t io_base_upper;
+    uint16_t io_limit_upper;
+
+    uint8_t capabilities;
+
+    uint8_t reserved[3];
+
+    uint32_t exp_bar;
+
+    uint8_t int_line;
+    uint8_t int_pin;
+    uint16_t bridge_control;
+} BridgeConfig;
+
+typedef struct {
+    uint16_t vendor_id;
+    uint16_t device_id;
+
+    uint16_t command;
+    uint16_t status;
+
+    uint8_t revision;
+    uint8_t interface;
+    uint8_t subclass;
+    uint8_t class;
+
+    uint8_t cache_line_size;
+    uint8_t latency_timer;
+    uint8_t header_type;
+    uint8_t bist;
+
+    uint32_t reserved[12];
+} UnificatedConfig;
+
+typedef union {
+    DeviceConfig device;
+    BridgeConfig bridge;
+    UnificatedConfig uni;
+} PciConfig;
+
+typedef struct _BridgeDevice {
+    struct _BridgeDevice *previous;
+    struct _BridgeDevice *next;
 
     uint8_t bus;
     uint8_t device;
@@ -47,24 +167,15 @@ typedef struct device_t {
 
     uint8_t pci_index;
 
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint16_t command;
-    uint16_t status;
-    uint8_t revision;
-    uint8_t interface;
-    uint8_t subclass;
-    uint8_t class;
+    Type type;
 
-    uint32_t bars[6];
+    PciConfig pci_config;
+
     uint32_t bar_sizes[6];
-
-    uint16_t ss_vendor_id;
-    uint16_t ss_device_id;
 
     char *desc_vendor;
     char *desc_device;
-} Device;
+} BridgeDevice;
 
 typedef struct {
     uint8_t wdevices:1;
@@ -80,21 +191,21 @@ void draw(void);
 
 void draw_wdevices(void);
 void draw_waboutd(void);
-void draw_device(Device *d, int y, int x);
+void draw_device(BridgeDevice *d, int y, int x);
 
 void fill_devices(void);
+void update_device_data(BridgeDevice *device);
 uint8_t get_pci_index(const struct pci_dev_info *dev_info);
 char *get_vendor_description(struct pci_dev_info *dev_info);
 char *get_device_description(struct pci_dev_info *dev_info);
-int devices_between(Device *device_1, Device *device_2);
-int devices_before(Device *device);
-int devices_after(Device *device);
+int devices_between(BridgeDevice *device_1, BridgeDevice *device_2);
+int devices_before(BridgeDevice *device);
+int devices_after(BridgeDevice *device);
 
 void select_up(void);
 void select_down(void);
 void switch_waboutd(void);
 void hide_all_subwindows(void);
-
 
 
 Size wdevice_size = {0, 0};
@@ -107,14 +218,22 @@ WINDOW *waboutd = NULL;
 
 WindowFlags visible_windows;
 
-Device *first_device = NULL;
-Device *last_device = NULL;
+BridgeDevice *first_device = NULL;
+BridgeDevice *last_device = NULL;
 
-Device *selected_device = NULL;
+BridgeDevice *selected_device = NULL;
 
 
 int main(int argc, char *argv[])
 {
+    if (sizeof(DeviceConfig) != 64 ||
+        sizeof(BridgeConfig) != 64 ||
+        sizeof(UnificatedConfig) != 64
+    ) {
+        printf("Wrong size of config structs!");
+        return 1;
+    }
+
     fill_devices();
 
     init();
@@ -150,8 +269,8 @@ void init(void)
     }
 
     getmaxyx(stdscr, wdevice_size.height, wdevice_size.width);
-    waboutd_size.height = min(wdevice_size.height, 15);
-    waboutd_size.width = min(wdevice_size.width, 60);
+    waboutd_size.height = min(wdevice_size.height, 16);
+    waboutd_size.width = min(wdevice_size.width, 70);
 
     Point waboutd_pos;
     waboutd_pos.y = (wdevice_size.height-waboutd_size.height)/2;
@@ -207,9 +326,9 @@ void draw_wdevices(void)
     int x = 2;
     int y = 0;
 
-    mvwprintw(wdevices, y++, x, " b  d f  vid  did  cmd stat rv  c sc if");
+    mvwprintw(wdevices, y++, x, "typ  b  d f  vid  did  cmd stat rv  c sc if cs lt ht bi");
 
-    Device *first_device_for_printing = first_device;
+    BridgeDevice *first_device_for_printing = first_device;
     while (
         devices_between(first_device_for_printing, selected_device) >
                                                     wdevice_size.height-6
@@ -225,7 +344,7 @@ void draw_wdevices(void)
         y++;
     }
 
-    Device *d;
+    BridgeDevice *d;
     for (d = first_device_for_printing; d != NULL; d = d->next) {
         draw_device(d, y, x);
         y++;
@@ -241,7 +360,7 @@ void draw_wdevices(void)
         }
     }
 
-    mvwprintw(wdevices, wdevice_size.height-1, 2, "? - about");
+    mvwprintw(wdevices, wdevice_size.height-1, 2, "[/ - about]");
 
     touchwin(wdevices);
     wrefresh(wdevices);
@@ -255,10 +374,19 @@ void draw_waboutd(void)
     int x = 2;
     int y = 0;
 
-    mvwprintw(waboutd, y++, x, "%04X %04X %d",
-            selected_device->vendor_id,
-            selected_device->device_id,
-            selected_device->pci_index);
+    mvwprintw(waboutd, y, x, "{%04X %04X %d}",
+            selected_device->pci_config.uni.vendor_id,
+            selected_device->pci_config.uni.device_id,
+            selected_device->pci_index
+    );
+
+    mvwprintw(waboutd, y, x+16, "{%d %d %d}",
+            selected_device->bus,
+            selected_device->device,
+            selected_device->function
+    );
+
+    y++;
 
     if (selected_device->desc_vendor) {
         mvwprintw(waboutd, y++, x, "Vendor: %s", selected_device->desc_vendor);
@@ -267,29 +395,60 @@ void draw_waboutd(void)
         mvwprintw(waboutd, y++, x, "Device: %s", selected_device->desc_device);
     }
 
-    int i;
-    for (i = 0; i < 6; i++) {
-        if (selected_device->bar_sizes[i]) {
-                mvwprintw(waboutd, y++, x, "BAR %d: (%u) %X ", i, selected_device->bar_sizes[i], selected_device->bars[i]);
+    if (selected_device->type == TypeDevice) {
+        int i;
+        for (i = 0; i < 6; i++) {
+            if (selected_device->bar_sizes[i]) {
+                mvwprintw(waboutd, y++, x, "BAR %d: %X (%u)",
+                    i, selected_device->pci_config.device.bars[i],
+                    selected_device->bar_sizes[i]
+                );
+            }
         }
-
+    }
+    else if (selected_device->type == TypeBridge) {
+        mvwprintw(waboutd, y++, x, "Primary Bus: %d", selected_device->pci_config.bridge.primary_bus);
+        mvwprintw(waboutd, y++, x, "Secondary Bus: %d", selected_device->pci_config.bridge.secondary_bus);
+        mvwprintw(waboutd, y++, x, "Subordinate Bus: %d", selected_device->pci_config.bridge.subordinate_bus);
+        int i;
+        for (i = 0; i < 2; i++) {
+            if (selected_device->bar_sizes[i]) {
+                mvwprintw(waboutd, y++, x, "BAR %d: %X (%u)",
+                    i, selected_device->pci_config.bridge.bars[i],
+                    selected_device->bar_sizes[i]
+                );
+            }
+        }
     }
 
     touchwin(waboutd);
     wrefresh(waboutd);
 }
 
-void draw_device(Device *d, int y, int x)
+void draw_device(BridgeDevice *d, int y, int x)
 {
     if (use_color && d == selected_device) {
         wattron(wdevices, COLOR_PAIR(COLOR_PAIR_TEXT_INV));
     }
 
     mvwprintw(wdevices, y, x,
-        "%2d %2d %d %04X %04X %04X %04X %02X %02X %02X %02X",
-        d->bus, d->device, d->function, d->vendor_id, d->device_id,
-        d->command, d->status, d->revision,
-        d->class, d->subclass, d->interface
+        "%s %2d %2d %d %04X %04X %04X %04X %02X %02X %02X %02X %02X %02X %02X %02X",
+        d->type == TypeBridge ? "Bri" : "Dev",
+        d->bus,
+        d->device,
+        d->function,
+        d->pci_config.uni.vendor_id,
+        d->pci_config.uni.device_id,
+        d->pci_config.uni.command,
+        d->pci_config.uni.status,
+        d->pci_config.uni.revision,
+        d->pci_config.uni.class,
+        d->pci_config.uni.subclass,
+        d->pci_config.uni.interface,
+        d->pci_config.uni.cache_line_size,
+        d->pci_config.uni.latency_timer,
+        d->pci_config.uni.header_type,
+        d->pci_config.uni.bist
     );
 
     if (use_color && d == selected_device) {
@@ -310,8 +469,8 @@ void fill_devices(void)
         exit(1);
     }
 
-    Device *previous_device = NULL;
-    Device **next_device = &first_device;
+    BridgeDevice *previous_device = NULL;
+    BridgeDevice **next_device = &first_device;
 
     unsigned short bus, dev, func;
     for(bus = 0; bus <= MAX_BUS; bus++) {
@@ -327,7 +486,7 @@ void fill_devices(void)
                                                         0, &dev_info);
 
                 if (handleDevice != NULL) {
-                    *next_device = malloc(sizeof(Device));
+                    *next_device = malloc(sizeof(BridgeDevice));
                     (*next_device)->previous = previous_device;
                     (*next_device)->next = NULL;
 
@@ -337,119 +496,7 @@ void fill_devices(void)
 
                     (*next_device)->pci_index = get_pci_index(&dev_info);
 
-                    if (pci_read_config(
-                        handleDevice, 0x00, 1, 2,&(*next_device)->vendor_id
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get vendor_id");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x02, 1, 2, &(*next_device)->device_id
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get device_id");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x04, 1, 2, &(*next_device)->command
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get command");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x06, 1, 2, &(*next_device)->status
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get status");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x08, 1, 1, &(*next_device)->revision
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get revision");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x09, 1, 1, &(*next_device)->interface
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get interface");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x0a, 1, 1, &(*next_device)->subclass
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get subclasscode");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x0b, 1, 1, &(*next_device)->class
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get classcode");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x2C, 1, 2,&(*next_device)->ss_vendor_id
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get ss_vendor_id");
-                        exit(1);
-                    }
-
-                    if (pci_read_config(
-                        handleDevice, 0x2E, 1, 2, &(*next_device)->ss_device_id
-                    ) != PCI_SUCCESS) {
-                        perror("Unable to get ss_device_id");
-                        exit(1);
-                    }
-
-
-                    int bar_count = (*next_device)->class == 6 ? 2 : 6;
-                    int i;
-                    for (i = 0; i < bar_count; i++) {
-                        if (pci_read_config(
-                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bars[i]
-                        ) != PCI_SUCCESS) {
-                            perror("Unable to get bar");
-                            exit(1);
-                        }
-                        uint32_t data = 0xFFFFFFFF;
-                        if (pci_write_config(
-                            handleDevice, 0x10+0x04*i, 1, 4, &data
-                        ) != PCI_SUCCESS) {
-                            perror("Unable to write bar");
-                            exit(1);
-                        }
-                        if (pci_read_config(
-                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bar_sizes[i]
-                        ) != PCI_SUCCESS) {
-                            perror("Unable to get bar");
-                            exit(1);
-                        }
-                        if (pci_write_config(
-                            handleDevice, 0x10+0x04*i, 1, 4, &(*next_device)->bars[i]
-                        ) != PCI_SUCCESS) {
-                            perror("Unable to write bar");
-                            exit(1);
-                        }
-                        if ((*next_device)->bar_sizes[i] & 0x1 && (*next_device)->bar_sizes[i] & 0x2) {
-                            (*next_device)->bar_sizes[i] = 0;
-                        }
-                        else {
-                            if ((*next_device)->bar_sizes[i] & 0x1) {
-                                (*next_device)->bar_sizes[i] &= ~0x3;
-                            }
-                            else {
-                                (*next_device)->bar_sizes[i] &= ~0xF;
-                            }
-
-                            (*next_device)->bar_sizes[i] &= (~(*next_device)->bar_sizes[i])+1;
-                        }
-                    }
+                    update_device_data(*next_device);
 
                     pci_detach_device(handleDevice);
 
@@ -536,14 +583,14 @@ void hide_all_subwindows(void)
     visible_windows.wdevices = 1;
 }
 
-int devices_between(Device *device_1, Device *device_2)
+int devices_between(BridgeDevice *device_1, BridgeDevice *device_2)
 {
     if (device_1 == NULL || device_2 == NULL || device_1 == device_2) {
         return 0;
     }
 
     int i = 0;
-    Device *d = device_1->next;
+    BridgeDevice *d = device_1->next;
     while (d != NULL) {
         if (d == device_2) {
             return i;
@@ -555,11 +602,11 @@ int devices_between(Device *device_1, Device *device_2)
     return devices_between(device_2, device_1);
 }
 
-int devices_before(Device *device)
+int devices_before(BridgeDevice *device)
 {
     int i = 0;
     if (device != NULL) {
-        Device *d;
+        BridgeDevice *d;
         for (d = device->previous; d != NULL; d = d->previous) {
             i++;
         }
@@ -568,15 +615,79 @@ int devices_before(Device *device)
     return i;
 }
 
-int devices_after(Device *device)
+int devices_after(BridgeDevice *device)
 {
     int i = 0;
     if (device != NULL) {
-        Device *d;
+        BridgeDevice *d;
         for (d = device->next; d != NULL; d = d->next) {
             i++;
         }
     }
 
     return i;
+}
+
+void update_device_data(BridgeDevice *device)
+{
+    if (pci_read_config8(
+        device->bus, TO_DEVFUNC(device->device, device->function),
+        0, sizeof(device->pci_config), &device->pci_config
+    ) != PCI_SUCCESS) {
+        perror("Unable to get pci config");
+        exit(1);
+    }
+
+    device->type = device->pci_config.uni.class == 6 ? TypeBridge : TypeDevice;
+
+    memset(device->bar_sizes, 0, sizeof(device->bar_sizes));
+
+    int bar_count = device->type == TypeBridge ? 2 : 6;
+    int i;
+    for (i = 0; i < bar_count; i++) {
+        uint32_t data = 0xFFFFFFFF;
+        uint32_t address;
+        if (pci_read_config32(
+            device->bus, TO_DEVFUNC(device->device, device->function),
+            0x10+0x04*i, 1, &address
+        ) != PCI_SUCCESS) {
+            perror("Unable to get bar");
+            exit(1);
+        }
+        if (pci_write_config32(
+            device->bus, TO_DEVFUNC(device->device, device->function),
+            0x10+0x04*i, 1, &data
+        ) != PCI_SUCCESS) {
+            perror("Unable to write bar");
+            exit(1);
+        }
+        if (pci_read_config32(
+            device->bus, TO_DEVFUNC(device->device, device->function),
+            0x10+0x04*i, 1, &device->bar_sizes[i]
+        ) != PCI_SUCCESS) {
+            perror("Unable to get bar");
+            exit(1);
+        }
+        if (pci_write_config32(
+            device->bus, TO_DEVFUNC(device->device, device->function),
+            0x10+0x04*i, 1, &address
+        ) != PCI_SUCCESS) {
+            perror("Unable to write bar");
+            exit(1);
+        }
+
+        if (device->bar_sizes[i] & 0x1 && device->bar_sizes[i] & 0x2) {
+            device->bar_sizes[i] = 0;
+        }
+        else {
+            if (device->bar_sizes[i] & 0x1) {
+                device->bar_sizes[i] &= ~0x3;
+            }
+            else {
+                device->bar_sizes[i] &= ~0xF;
+            }
+
+            device->bar_sizes[i] &= (~device->bar_sizes[i])+1;
+        }
+    }
 }
