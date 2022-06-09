@@ -161,6 +161,11 @@ typedef struct _BridgeDevice {
     struct _BridgeDevice *previous;
     struct _BridgeDevice *next;
 
+    struct _BridgeDevice *first_connected_device;
+    struct _BridgeDevice *last_connected_device;
+    struct _BridgeDevice *previous_connected_device;
+    struct _BridgeDevice *next_connected_device;
+
     uint8_t bus;
     uint8_t device;
     uint8_t function;
@@ -201,6 +206,8 @@ char *get_device_description(struct pci_dev_info *dev_info);
 int devices_between(BridgeDevice *device_1, BridgeDevice *device_2);
 int devices_before(BridgeDevice *device);
 int devices_after(BridgeDevice *device);
+void fill_tree(void);
+void fill_bridge(BridgeDevice *bridge, int nesting);
 
 void select_up(void);
 void select_down(void);
@@ -208,6 +215,7 @@ void switch_waboutd(void);
 void hide_all_subwindows(void);
 
 
+Size stdscr_size = {0, 0};
 Size wdevice_size = {0, 0};
 Size waboutd_size = {0, 0};
 int use_color = 0;
@@ -221,6 +229,8 @@ WindowFlags visible_windows;
 BridgeDevice *first_device = NULL;
 BridgeDevice *last_device = NULL;
 
+BridgeDevice *root_device = NULL;
+
 BridgeDevice *selected_device = NULL;
 
 
@@ -230,11 +240,12 @@ int main(int argc, char *argv[])
         sizeof(BridgeConfig) != 64 ||
         sizeof(UnificatedConfig) != 64
     ) {
-        printf("Wrong size of config structs!");
+        fprintf(stderr, "Wrong size of config structs!\n");
         return 1;
     }
 
     fill_devices();
+    // return 0;
 
     init();
 
@@ -268,15 +279,24 @@ void init(void)
         init_pair(COLOR_PAIR_TEXT_INV, COLOR_BLACK, COLOR_WHITE);
     }
 
-    getmaxyx(stdscr, wdevice_size.height, wdevice_size.width);
-    waboutd_size.height = min(wdevice_size.height, 16);
-    waboutd_size.width = min(wdevice_size.width, 70);
+    getmaxyx(stdscr, stdscr_size.height, stdscr_size.width);
+
+    wdevice_size.height = min(stdscr_size.height, 26);
+    wdevice_size.width = min(stdscr_size.width, 59);
+
+    Point wdevice_pos;
+    wdevice_pos.y = (stdscr_size.height-wdevice_size.height)/2;
+    wdevice_pos.x = (stdscr_size.width-wdevice_size.width)/2;
+
+    waboutd_size.height = min(stdscr_size.height, 16);
+    waboutd_size.width = min(stdscr_size.width, 70);
 
     Point waboutd_pos;
-    waboutd_pos.y = (wdevice_size.height-waboutd_size.height)/2;
-    waboutd_pos.x = (wdevice_size.width-waboutd_size.width)/2;
+    waboutd_pos.y = (stdscr_size.height-waboutd_size.height)/2;
+    waboutd_pos.x = (stdscr_size.width-waboutd_size.width)/2;
 
-    wdevices = newwin(wdevice_size.height, wdevice_size.width, 0, 0);
+    wdevices = newwin(wdevice_size.height, wdevice_size.width,
+                wdevice_pos.y, wdevice_pos.x);
     waboutd = newwin(waboutd_size.height, waboutd_size.width,
                 waboutd_pos.y, waboutd_pos.x);
 }
@@ -316,6 +336,8 @@ void draw(void)
     if (visible_windows.waboutd) {
         draw_waboutd();
     }
+
+    refresh();
 }
 
 void draw_wdevices(void)
@@ -361,6 +383,7 @@ void draw_wdevices(void)
     }
 
     mvwprintw(wdevices, wdevice_size.height-1, 2, "[/ - about]");
+    mvwprintw(wdevices, wdevice_size.height-1, wdevice_size.width-14, "[F10 - exit]");
 
     touchwin(wdevices);
     wrefresh(wdevices);
@@ -487,12 +510,22 @@ void fill_devices(void)
 
                 if (handleDevice != NULL) {
                     *next_device = malloc(sizeof(BridgeDevice));
+                    if (*next_device == NULL) {
+                        perror("Unable to get bar");
+                        exit(1);
+                    }
+
                     (*next_device)->previous = previous_device;
                     (*next_device)->next = NULL;
 
                     (*next_device)->bus = bus;
                     (*next_device)->device = dev;
                     (*next_device)->function = func;
+
+                    (*next_device)->first_connected_device = NULL;
+                    (*next_device)->last_connected_device = NULL;
+                    (*next_device)->previous_connected_device = NULL;
+                    (*next_device)->next_connected_device = NULL;
 
                     (*next_device)->pci_index = get_pci_index(&dev_info);
 
@@ -512,6 +545,8 @@ void fill_devices(void)
     }
 
     selected_device = first_device;
+
+    fill_tree();
 }
 
 char *get_vendor_description(struct pci_dev_info *dev_info)
@@ -688,6 +723,56 @@ void update_device_data(BridgeDevice *device)
             }
 
             device->bar_sizes[i] &= (~device->bar_sizes[i])+1;
+        }
+    }
+}
+
+void fill_tree(void)
+{
+    BridgeDevice *d;
+    for (d = first_device; d != NULL; d = d->next) {
+        if (d->type == TypeBridge && d->pci_config.uni.subclass == 0) {
+            if (root_device == NULL) {
+                root_device = d;
+                printf("%04x %04x\n", d->pci_config.uni.vendor_id, d->pci_config.uni.device_id); fflush(stdout);
+            }
+            else {
+                fprintf(stderr, "Too many root devices!\n");
+                exit(1);
+            }
+        }
+    }
+
+    fill_bridge(root_device, 1);
+}
+
+void fill_bridge(BridgeDevice *bridge, int nesting)
+{
+    BridgeDevice *d;
+    for (d = first_device; d != NULL; d = d->next) {
+        int is_host_bridge = d->type == TypeBridge && d->pci_config.uni.subclass == 0;
+        int is_on_this_bus = bridge->pci_config.bridge.secondary_bus == d->bus;
+
+        if (!is_host_bridge && is_on_this_bus) {
+            printf("%*s%04x %04x %d %d\n", nesting, "",
+                d->pci_config.uni.vendor_id, d->pci_config.uni.device_id,
+                bridge->pci_config.bridge.secondary_bus, d->bus
+            ); fflush(stdout);
+
+            if (bridge->last_connected_device == NULL) {
+                bridge->first_connected_device = d;
+                bridge->last_connected_device = d;
+            }
+            else {
+                bridge->last_connected_device->next_connected_device = d;
+                d->previous_connected_device = bridge->last_connected_device;
+                bridge->last_connected_device = d;
+            }
+
+            if (d->type == TypeBridge) {
+                // fill_bridge(d, ++nesting);
+            }
+            if (nesting > 10) break;
         }
     }
 }
