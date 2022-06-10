@@ -19,10 +19,17 @@
 #define CBUTTON_SELECT_UP       KEY_UP
 #define CBUTTON_SELECT_DOWN     KEY_DOWN
 #define CBUTTON_ABOUT_DEVICE    '/'
+#define CBUTTON_SHOW_MODE       't'
 #define CBUTTON_ESCAPE          27
 
 #define COLOR_PAIR_TEXT         1
 #define COLOR_PAIR_TEXT_INV     2
+
+#define CLASS_BRIDGE            6
+#define SUBCLASS_BRIDGE_PCI     4
+
+#define DEVICE_BAR_COUNT        6
+#define BRIDGE_BAR_COUNT        2
 
 #define TO_DEVFUNC(dev, func)   (((dev)<<3)+(func))
 
@@ -43,6 +50,11 @@ typedef enum {
     TypeBridge,
 } Type;
 
+typedef enum {
+    ShowModeTable,
+    ShowModeTree,
+} ShowMode;
+
 typedef struct {
     uint16_t vendor_id;
     uint16_t device_id;
@@ -60,7 +72,7 @@ typedef struct {
     uint8_t header_type;
     uint8_t bist;
 
-    uint32_t bars[6];
+    uint32_t bars[DEVICE_BAR_COUNT];
 
     uint32_t cis_pointer;
 
@@ -96,7 +108,7 @@ typedef struct {
     uint8_t header_type;
     uint8_t bist;
 
-    uint32_t bars[2];
+    uint32_t bars[BRIDGE_BAR_COUNT];
 
     uint8_t primary_bus;
     uint8_t secondary_bus;
@@ -166,6 +178,8 @@ typedef struct _BridgeDevice {
     struct _BridgeDevice *previous_connected_device;
     struct _BridgeDevice *next_connected_device;
 
+    int nesting;
+
     uint8_t bus;
     uint8_t device;
     uint8_t function;
@@ -176,7 +190,7 @@ typedef struct _BridgeDevice {
 
     PciConfig pci_config;
 
-    uint32_t bar_sizes[6];
+    uint32_t bar_sizes[max(DEVICE_BAR_COUNT, BRIDGE_BAR_COUNT)];
 
     char *desc_vendor;
     char *desc_device;
@@ -212,6 +226,7 @@ void fill_bridge(BridgeDevice *bridge, int nesting);
 void select_up(void);
 void select_down(void);
 void switch_waboutd(void);
+void switch_show_mode(void);
 void hide_all_subwindows(void);
 
 
@@ -225,6 +240,7 @@ WINDOW *wdevices = NULL;
 WINDOW *waboutd = NULL;
 
 WindowFlags visible_windows;
+ShowMode show_mode;
 
 BridgeDevice *first_device = NULL;
 BridgeDevice *last_device = NULL;
@@ -245,7 +261,6 @@ int main(int argc, char *argv[])
     }
 
     fill_devices();
-    // return 0;
 
     init();
 
@@ -270,6 +285,7 @@ void init(void)
     noecho();
 
     hide_all_subwindows();
+    show_mode = ShowModeTable;
 
     use_color = has_colors() == TRUE;
 
@@ -282,7 +298,7 @@ void init(void)
     getmaxyx(stdscr, stdscr_size.height, stdscr_size.width);
 
     wdevice_size.height = min(stdscr_size.height, 26);
-    wdevice_size.width = min(stdscr_size.width, 59);
+    wdevice_size.width = min(stdscr_size.width, 62);
 
     Point wdevice_pos;
     wdevice_pos.y = (stdscr_size.height-wdevice_size.height)/2;
@@ -322,6 +338,9 @@ void update(void)
         case CBUTTON_ABOUT_DEVICE:
             switch_waboutd();
             break;
+        case CBUTTON_SHOW_MODE:
+            switch_show_mode();
+            break;
         case CBUTTON_ESCAPE:
             hide_all_subwindows();
             break;
@@ -348,7 +367,11 @@ void draw_wdevices(void)
     int x = 2;
     int y = 0;
 
-    mvwprintw(wdevices, y++, x, "typ  b  d f  vid  did  cmd stat rv  c sc if cs lt ht bi");
+    if (show_mode == ShowModeTable) {
+        mvwprintw(wdevices, y, x, "typ  b  d f  vid  did di  cmd stat rv  c sc if cs lt ht bi");
+    }
+
+    y++;
 
     BridgeDevice *first_device_for_printing = first_device;
     while (
@@ -383,6 +406,13 @@ void draw_wdevices(void)
     }
 
     mvwprintw(wdevices, wdevice_size.height-1, 2, "[/ - about]");
+
+    if (show_mode == ShowModeTable) {
+        mvwprintw(wdevices, wdevice_size.height-1, 15, "[T - tree]");
+    }
+    else if (show_mode == ShowModeTree) {
+        mvwprintw(wdevices, wdevice_size.height-1, 15, "[T - table]");
+    }
     mvwprintw(wdevices, wdevice_size.height-1, wdevice_size.width-14, "[F10 - exit]");
 
     touchwin(wdevices);
@@ -420,7 +450,7 @@ void draw_waboutd(void)
 
     if (selected_device->type == TypeDevice) {
         int i;
-        for (i = 0; i < 6; i++) {
+        for (i = 0; i < DEVICE_BAR_COUNT; i++) {
             if (selected_device->bar_sizes[i]) {
                 mvwprintw(waboutd, y++, x, "BAR %d: %X (%u)",
                     i, selected_device->pci_config.device.bars[i],
@@ -434,7 +464,7 @@ void draw_waboutd(void)
         mvwprintw(waboutd, y++, x, "Secondary Bus: %d", selected_device->pci_config.bridge.secondary_bus);
         mvwprintw(waboutd, y++, x, "Subordinate Bus: %d", selected_device->pci_config.bridge.subordinate_bus);
         int i;
-        for (i = 0; i < 2; i++) {
+        for (i = 0; i < BRIDGE_BAR_COUNT; i++) {
             if (selected_device->bar_sizes[i]) {
                 mvwprintw(waboutd, y++, x, "BAR %d: %X (%u)",
                     i, selected_device->pci_config.bridge.bars[i],
@@ -454,25 +484,41 @@ void draw_device(BridgeDevice *d, int y, int x)
         wattron(wdevices, COLOR_PAIR(COLOR_PAIR_TEXT_INV));
     }
 
-    mvwprintw(wdevices, y, x,
-        "%s %2d %2d %d %04X %04X %04X %04X %02X %02X %02X %02X %02X %02X %02X %02X",
-        d->type == TypeBridge ? "Bri" : "Dev",
-        d->bus,
-        d->device,
-        d->function,
-        d->pci_config.uni.vendor_id,
-        d->pci_config.uni.device_id,
-        d->pci_config.uni.command,
-        d->pci_config.uni.status,
-        d->pci_config.uni.revision,
-        d->pci_config.uni.class,
-        d->pci_config.uni.subclass,
-        d->pci_config.uni.interface,
-        d->pci_config.uni.cache_line_size,
-        d->pci_config.uni.latency_timer,
-        d->pci_config.uni.header_type,
-        d->pci_config.uni.bist
-    );
+    if (show_mode == ShowModeTable) {
+        mvwprintw(wdevices, y, x,
+            "%s %2d %2d %d %04X %04X %2d %04X %04X %02X %02X %02X %02X %02X %02X %02X %02X",
+            d->type == TypeBridge ? "Bri" : "Dev",
+            d->bus,
+            d->device,
+            d->function,
+            d->pci_config.uni.vendor_id,
+            d->pci_config.uni.device_id,
+            d->pci_index,
+            d->pci_config.uni.command,
+            d->pci_config.uni.status,
+            d->pci_config.uni.revision,
+            d->pci_config.uni.class,
+            d->pci_config.uni.subclass,
+            d->pci_config.uni.interface,
+            d->pci_config.uni.cache_line_size,
+            d->pci_config.uni.latency_timer,
+            d->pci_config.uni.header_type,
+            d->pci_config.uni.bist
+        );
+    }
+    else if (show_mode == ShowModeTree) {
+        mvwprintw(wdevices, y, x,
+            "%*s %s %2d %2d %d %04X %04X %2d",
+            d->nesting, "",
+            d->type == TypeBridge ? "Bri" : "Dev",
+            d->bus,
+            d->device,
+            d->function,
+            d->pci_config.uni.vendor_id,
+            d->pci_config.uni.device_id,
+            d->pci_index
+        );
+    }
 
     if (use_color && d == selected_device) {
         wattroff(wdevices, COLOR_PAIR(COLOR_PAIR_TEXT_INV));
@@ -526,6 +572,8 @@ void fill_devices(void)
                     (*next_device)->last_connected_device = NULL;
                     (*next_device)->previous_connected_device = NULL;
                     (*next_device)->next_connected_device = NULL;
+
+                    (*next_device)->nesting = 0;
 
                     (*next_device)->pci_index = get_pci_index(&dev_info);
 
@@ -612,6 +660,12 @@ void switch_waboutd(void)
     visible_windows.waboutd = !visible_windows.waboutd;
 }
 
+void switch_show_mode(void)
+{
+    if (show_mode == ShowModeTable)         show_mode = ShowModeTree;
+    else if (show_mode == ShowModeTree)     show_mode = ShowModeTable;
+}
+
 void hide_all_subwindows(void)
 {
     memset(&visible_windows, 0, sizeof(visible_windows));
@@ -673,11 +727,11 @@ void update_device_data(BridgeDevice *device)
         exit(1);
     }
 
-    device->type = device->pci_config.uni.class == 6 ? TypeBridge : TypeDevice;
+    device->type = device->pci_config.uni.class == CLASS_BRIDGE ? TypeBridge : TypeDevice;
 
     memset(device->bar_sizes, 0, sizeof(device->bar_sizes));
 
-    int bar_count = device->type == TypeBridge ? 2 : 6;
+    int bar_count = device->type == TypeBridge ? BRIDGE_BAR_COUNT : DEVICE_BAR_COUNT;
     int i;
     for (i = 0; i < bar_count; i++) {
         uint32_t data = 0xFFFFFFFF;
@@ -729,12 +783,13 @@ void update_device_data(BridgeDevice *device)
 
 void fill_tree(void)
 {
+    int nesting = 0;
     BridgeDevice *d;
     for (d = first_device; d != NULL; d = d->next) {
         if (d->type == TypeBridge && d->pci_config.uni.subclass == 0) {
             if (root_device == NULL) {
                 root_device = d;
-                printf("%04x %04x\n", d->pci_config.uni.vendor_id, d->pci_config.uni.device_id); fflush(stdout);
+                root_device->nesting = nesting;
             }
             else {
                 fprintf(stderr, "Too many root devices!\n");
@@ -743,7 +798,7 @@ void fill_tree(void)
         }
     }
 
-    fill_bridge(root_device, 1);
+    fill_bridge(root_device, nesting+1);
 }
 
 void fill_bridge(BridgeDevice *bridge, int nesting)
@@ -754,11 +809,7 @@ void fill_bridge(BridgeDevice *bridge, int nesting)
         int is_on_this_bus = bridge->pci_config.bridge.secondary_bus == d->bus;
 
         if (!is_host_bridge && is_on_this_bus) {
-            printf("%*s%04x %04x %d %d\n", nesting, "",
-                d->pci_config.uni.vendor_id, d->pci_config.uni.device_id,
-                bridge->pci_config.bridge.secondary_bus, d->bus
-            ); fflush(stdout);
-
+            d->nesting = nesting;
             if (bridge->last_connected_device == NULL) {
                 bridge->first_connected_device = d;
                 bridge->last_connected_device = d;
@@ -769,10 +820,9 @@ void fill_bridge(BridgeDevice *bridge, int nesting)
                 bridge->last_connected_device = d;
             }
 
-            if (d->type == TypeBridge) {
-                // fill_bridge(d, ++nesting);
+            if (d->type == TypeBridge && d->pci_config.uni.subclass == SUBCLASS_BRIDGE_PCI) {
+                fill_bridge(d, nesting+1);
             }
-            if (nesting > 10) break;
         }
     }
 }
