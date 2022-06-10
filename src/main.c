@@ -210,6 +210,7 @@ void draw(void);
 
 void draw_wdevices(void);
 void draw_waboutd(void);
+void draw_bridge(BridgeDevice *d, int *y, int x, int *i, int index_of_first_device_for_printing);
 void draw_device(BridgeDevice *d, int y, int x);
 
 void fill_devices(void);
@@ -297,7 +298,7 @@ void init(void)
 
     getmaxyx(stdscr, stdscr_size.height, stdscr_size.width);
 
-    wdevice_size.height = min(stdscr_size.height, 26);
+    wdevice_size.height = min(stdscr_size.height, 20);
     wdevice_size.width = min(stdscr_size.width, 62);
 
     Point wdevice_pos;
@@ -372,46 +373,57 @@ void draw_wdevices(void)
     }
 
     y++;
+    x--;
 
+    int index_of_first_device_for_printing = 0;
     BridgeDevice *first_device_for_printing = first_device;
     while (
         devices_between(first_device_for_printing, selected_device) >
                                                     wdevice_size.height-6
     ) {
         first_device_for_printing = first_device_for_printing->next;
+        index_of_first_device_for_printing++;
     }
 
     if (first_device_for_printing != first_device) {
         int xx;
-        for (xx = x; xx < wdevice_size.width-2; xx+=2) {
-            mvwprintw(wdevices, y, xx, "/\\");
+        for (xx = x; xx < wdevice_size.width-2; xx+=4) {
+            mvwprintw(wdevices, y++, xx, " /\\ ");
         }
-        y++;
     }
 
-    BridgeDevice *d;
-    for (d = first_device_for_printing; d != NULL; d = d->next) {
-        draw_device(d, y, x);
-        y++;
-
-        if (y == wdevice_size.height-1) {
-            if (d != last_device) {
-                int xx;
-                for (xx = x; xx < wdevice_size.width-2; xx+=2) {
-                    mvwprintw(wdevices, y-1, xx, "\\/");
-                }
+    int i = 0;
+    if (show_mode == ShowModeTable) {
+        BridgeDevice *d;
+        for (d = first_device; d != NULL; d = d->next) {
+            if (i++ < index_of_first_device_for_printing) {
+                continue;
             }
-            break;
+
+            draw_device(d, y++, x);
+
+            if (y == wdevice_size.height-1) {
+                if (d != last_device) {
+                    int xx;
+                    for (xx = x; xx < wdevice_size.width-2; xx+=4) {
+                        mvwprintw(wdevices, y-1, xx, " \\/ ");
+                    }
+                }
+                break;
+            }
         }
+    }
+    else if (show_mode == ShowModeTree) {
+        draw_bridge(root_device, &y, x, &i, index_of_first_device_for_printing);
     }
 
     mvwprintw(wdevices, wdevice_size.height-1, 2, "[/ - about]");
 
     if (show_mode == ShowModeTable) {
-        mvwprintw(wdevices, wdevice_size.height-1, 15, "[T - tree]");
+        mvwprintw(wdevices, wdevice_size.height-1, 15, "[t - tree]");
     }
     else if (show_mode == ShowModeTree) {
-        mvwprintw(wdevices, wdevice_size.height-1, 15, "[T - table]");
+        mvwprintw(wdevices, wdevice_size.height-1, 15, "[t - table]");
     }
     mvwprintw(wdevices, wdevice_size.height-1, wdevice_size.width-14, "[F10 - exit]");
 
@@ -478,6 +490,44 @@ void draw_waboutd(void)
     wrefresh(waboutd);
 }
 
+void draw_bridge(BridgeDevice *b, int *y, int x, int *i, int index_of_first_device_for_printing)
+{
+    // printf("\a\n"); fflush(stdout); sleep(1);
+    if (b == root_device) {
+        mvwprintw(wdevices, 0, 0, "%d", *i);
+        mvwprintw(wdevices, 1, 0, "%d", index_of_first_device_for_printing);
+    }
+
+    if ((*i)++ >= index_of_first_device_for_printing) {
+        draw_device(b, (*y)++, x);
+    }
+
+    BridgeDevice *d;
+    for (d = b->first_connected_device; d != NULL; d = d->first_connected_device->next_connected_device) {
+        if ((*i)++ < index_of_first_device_for_printing) {
+            continue;
+        }
+
+        if (d->type == TypeBridge) {
+            draw_bridge(d, y, x, i, index_of_first_device_for_printing);
+        }
+        else {
+            draw_device(d, (*y)++, x);
+        }
+
+        if (y == wdevice_size.height-1) {
+            //TODO print bottom arrows
+            // if (d != last_device) {
+            //     int xx;
+            //     for (xx = x; xx < wdevice_size.width-2; xx+=4) {
+            //         mvwprintw(wdevices, y-1, xx, " \\/ ");
+            //     }
+            // }
+            break;
+        }
+    }
+}
+
 void draw_device(BridgeDevice *d, int y, int x)
 {
     if (use_color && d == selected_device) {
@@ -486,7 +536,7 @@ void draw_device(BridgeDevice *d, int y, int x)
 
     if (show_mode == ShowModeTable) {
         mvwprintw(wdevices, y, x,
-            "%s %2d %2d %d %04X %04X %2d %04X %04X %02X %02X %02X %02X %02X %02X %02X %02X",
+            " %s %2d %2d %d %04X %04X %2d %04X %04X %02X %02X %02X %02X %02X %02X %02X %02X ",
             d->type == TypeBridge ? "Bri" : "Dev",
             d->bus,
             d->device,
@@ -508,7 +558,7 @@ void draw_device(BridgeDevice *d, int y, int x)
     }
     else if (show_mode == ShowModeTree) {
         mvwprintw(wdevices, y, x,
-            "%*s %s %2d %2d %d %04X %04X %2d",
+            " %*s%s %2d %2d %d %04X %04X %2d ",
             d->nesting, "",
             d->type == TypeBridge ? "Bri" : "Dev",
             d->bus,
